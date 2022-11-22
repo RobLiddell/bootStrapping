@@ -1,0 +1,183 @@
+---
+title: "Bootstrap Investigation"
+author: "Robert Liddell"
+date: "2022-11-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(rstatix)
+library(tidyverse)
+library(stringr)
+library(ggplot2)
+library(kableExtra)
+```
+
+# Goal
+The point of this document is to look at different types of bootstrapping methods, starting with simple comparisons and then leading to regression models
+
+```{r Data Setup}
+#Data generation for sample comparisons
+n=50
+set.seed(8129021)
+
+dat<-tibble(A=rnorm(n,mean=0.25),B=rnorm(n,mean=-.2),C=rnorm(n,mean=0),D=rnorm(n,mean=3)) 
+
+linDat<-tibble(X=runif(n)*10,Y=X*0.3+0.1+rnorm(n))
+
+
+
+kableTable <- function(.data,.cap=""){
+  .data %>%
+    kbl(caption=.cap) %>% 
+    kable_styling('hover') %>% 
+    return()
+}
+
+```
+
+## One Sample t-test
+
+
+```{r one sample t-test}
+
+nSim=10000
+
+oneSampleTstat<-function(x,n){
+  mean(x)/(sd(x)/sqrt(n)) %>% 
+    return()
+}
+
+#Subsetting data from one sample test
+oneSample <- dat %>% 
+  select(A)
+
+datStat<-oneSample %>% 
+  summarise(testStatistic=oneSampleTstat(A,n())) %>% 
+  pull()
+
+pVal<-oneSample %>% 
+  mutate(t=mean(A),
+         A=A-mean(A)) %>% 
+  slice_sample(prop=nSim,replace=TRUE) %>% 
+  mutate(trial=floor((row_number()-1)/n)) %>% 
+  group_by(trial) %>% 
+  summarise(tStat=oneSampleTstat(A,n())) %>% 
+  mutate(valCheck=if_else(abs(tStat)>=abs(datStat),1,0)) %>% 
+  summarise(bootStrap_P=sum(valCheck)/n())
+
+oneSample %>% 
+  t_test(A~1) %>% 
+  rename(tTest_P=p) %>% 
+  add_column(pVal) %>% 
+  kableTable("Table 1. Comparison of the one-sample t-test p value to a p value calculated through the bootstapping method")
+  
+
+
+```
+
+For the one sample bootstrap the Null hypothesis is that the mean is equal to some value x. If the NULL is true then we should be able to subtract the difference between the sample mean and x and still get a sample with a mean similar to the sample after random sampling. The code below compares the sample mean to 0. Thus the difference between the sample mean and x is just the sample mean. This is subtracted from the sample and then `r nSim` bootstrap samples are created. The t-statistic is calculated for each trial sample and compared to the t-statistic from the original sample. The proportion of bootstrapped samples with t-statistic magnitudes larger than the original t-statistic gives the p-value for the comparison of the sample to 0.
+
+
+## Two Sample t-test (paired)
+
+```{r two sample t-test-paired}
+
+nSim=10000
+
+twoSample_paired <- dat %>% 
+  transmute(A-B)
+
+datStat <- twoSample_paired %>% 
+  summarise(testStatistic=oneSampleTstat(`A - B`,n)) %>% 
+  pull()
+
+pVal<-twoSample_paired %>% 
+  slice(rep(1:n(),nSim)) %>% 
+  mutate(trial=floor((row_number()-1)/n),
+         swap = runif(n()),.before=`A - B`,
+         `A - B`= if_else(swap>0.5,-1*`A - B`,`A - B`)) %>% 
+  group_by(trial) %>% 
+  summarise(tStat=oneSampleTstat(`A - B`,n())) %>% 
+  mutate(valCheck=if_else(abs(tStat)>=abs(datStat),1,0)) %>% 
+  summarise(bootStrap_P=sum(valCheck)/n())
+  
+  
+  
+twoSample_paired %>% 
+  t_test(`A - B`~1) %>% 
+  rename(tTest_P=p) %>% 
+  add_column(pVal) %>% 
+  kableTable("Table 2. Comparison of the paired two-sample t-test p value to a p value calculated through the bootstapping method")
+
+
+
+```
+The paired two sample bootstrap is similar to the one sample in that the paired data can be reduced to a single sample by subtracting A from B. The null hypothesis for this data is that the mean of A is equal to B. if this is true then A-B should be equal to B-A. This for this bootstrap the data was repeated `r nSim` times and then 50% of A and B observations were randomly swapped. Similar to the one sample test, the t-statistic is calculated for each trial sample and compared to the t-statistic from the original sample. The proportion of bootstrapped samples with t-statistic magnitudes larger than the original t-statistic gives the p-value for the comparison of A and B.
+
+## Two sample t-test
+```{r two sample t-test-unpaired}
+
+twoSampleTTest<-function(.data){
+  .data %>% 
+    summarise(m=mean(value),s=var(value),N=n(),.groups = "drop") %>% 
+    pivot_wider(names_from = name,
+                values_from = c(m,s,N)) %>% 
+    mutate(Diff=m_A-m_B,
+           SE=sqrt((s_A/N_A)+(s_B/N_B)),
+           tStat=Diff/(SE/sqrt(n))) %>% 
+    return()
+}
+
+
+twoSample_unpaired <- dat %>% 
+  select(A, B) %>% 
+  pivot_longer(cols=everything())
+
+nSim=10000
+
+datStat <- twoSample_unpaired%>% 
+  group_by(name) %>% 
+  twoSampleTTest() %>% 
+  pull()
+
+
+
+pVal<-twoSample_unpaired %>% 
+  slice_sample(prop=nSim,replace=TRUE) %>% 
+  mutate(trial=floor((row_number()-1)/(n*2)),
+         name=if_else(row_number()%%2==1,"A","B")) %>% 
+  group_by(trial,name) %>% 
+  twoSampleTTest() %>% 
+  mutate(valCheck=if_else(abs(tStat)>=abs(datStat),1,0)) %>% 
+  summarise(bootStrap_P=sum(valCheck)/n())
+
+
+
+twoSample_unpaired %>% 
+  t_test(value~name)%>% 
+  rename(tTest_P=p) %>% 
+  add_column(pVal) %>% 
+  kableTable("Table 3. Comparison of the unpaired two-sample t-test p value to a p value calculated through the bootstapping method")
+
+```
+
+The unpaired two sample t-test can not be reduced to a one sample test analog. Thus a different method is required. Under the null hypothesis the mean of A and B are the same. Thus if it is true we should be able to generate random samples with replacement from both groups A and B without considering their origin, and pseudorandomly assign them to group A and B and get differences between the groups with similar magnitudes as seen in the original groups. The bootstraps t-statistics were compared to the original t-statistic to generate p-values for the bootstrap comparison. 
+
+## Comparing Multiple Groups
+
+```{r n Group comparisons}
+
+```
+
+## Linear Regression
+
+```{r Linear Regression}
+linDat %>% 
+  lm(Y~X,data=.) %>% 
+  tidy()
+
+```
+
+
