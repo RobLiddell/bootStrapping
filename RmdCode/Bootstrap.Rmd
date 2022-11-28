@@ -24,7 +24,7 @@ set.seed(8129021)
 
 dat<-tibble(A=rnorm(n,mean=0.25),B=rnorm(n,mean=-.2),C=rnorm(n,mean=0),D=rnorm(n,mean=3)) 
 
-linDat<-tibble(X=runif(n)*10,Y=X*0.3+0.1+rnorm(n))
+linDat<-tibble(X=runif(n)*10,Y=X*0.1+0.1+rnorm(n))
 
 
 
@@ -32,6 +32,11 @@ kableTable <- function(.data,.cap=""){
   .data %>%
     kbl(caption=.cap) %>% 
     kable_styling('hover') %>% 
+    return()
+}
+
+trialNumbering<-function(rows,n){
+  floor((rows-1)/n) %>% 
     return()
 }
 
@@ -61,7 +66,7 @@ pVal<-oneSample %>%
   mutate(t=mean(A),
          A=A-mean(A)) %>% 
   slice_sample(prop=nSim,replace=TRUE) %>% 
-  mutate(trial=floor((row_number()-1)/n)) %>% 
+  mutate(trial=trialNumbering(row_number(),n)) %>% 
   group_by(trial) %>% 
   summarise(tStat=oneSampleTstat(A,n())) %>% 
   mutate(valCheck=if_else(abs(tStat)>=abs(datStat),1,0)) %>% 
@@ -95,7 +100,7 @@ datStat <- twoSample_paired %>%
 
 pVal<-twoSample_paired %>% 
   slice(rep(1:n(),nSim)) %>% 
-  mutate(trial=floor((row_number()-1)/n),
+  mutate(trial=trialNumbering(row_number(),n),
          swap = runif(n()),.before=`A - B`,
          `A - B`= if_else(swap>0.5,-1*`A - B`,`A - B`)) %>% 
   group_by(trial) %>% 
@@ -146,7 +151,7 @@ datStat <- twoSample_unpaired%>%
 
 pVal<-twoSample_unpaired %>% 
   slice_sample(prop=nSim,replace=TRUE) %>% 
-  mutate(trial=floor((row_number()-1)/(n*2)),
+  mutate(trial=trialNumbering(row_number(),n),
          name=if_else(row_number()%%2==1,"A","B")) %>% 
   group_by(trial,name) %>% 
   twoSampleTTest() %>% 
@@ -174,9 +179,21 @@ The unpaired two sample t-test can not be reduced to a one sample test analog. T
 ## Linear Regression
 
 ```{r Linear Regression}
-linDat %>% 
+fit <- linDat %>% 
   lm(Y~X,data=.) %>% 
   tidy()
+
+linDat %>% 
+  slice_sample(prop=5,replace = TRUE) %>% 
+  mutate(trial=trialNumbering(row_number(),n)) %>% 
+  nest(cols=c(X,Y)) %>% 
+  mutate(model=map(cols,~lm(Y~X,data=.x)),
+         model=map(model,tidy)) %>% 
+  select(trial,model) %>% 
+  unnest(model) %>% 
+  group_by(term) %>% 
+  summarise(lwrLimit=quantile(estimate,0.025),
+            uprLimit=quantile(estimate,0.975))
 
 ```
 
